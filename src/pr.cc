@@ -37,6 +37,32 @@ pvector<ScoreT> PageRankPull(const Graph &g, int max_iters,
   const ScoreT base_score = (1.0f - kDamp) / g.num_nodes();
   pvector<ScoreT> scores(g.num_nodes(), init_score);
   pvector<ScoreT> outgoing_contrib(g.num_nodes());
+
+
+  // #pragma omp parallel
+  // {
+  //   for (int iter=0; iter < max_iters; iter++) {
+  //     double error = 0;
+  //     #pragma omp parallel
+  //     for (NodeID n=0; n < g.num_nodes(); n++)
+  //       outgoing_contrib[n] = scores[n] / g.out_degree(n);
+
+  //     #pragma omp parallel
+  //     for (NodeID u=0; u < g.num_nodes(); u++) {
+  //       ScoreT incoming_total = 0;
+  //       for (NodeID v : g.in_neigh(u))
+  //         incoming_total += outgoing_contrib[v];
+  //       ScoreT old_score = scores[u];
+  //       scores[u] = base_score + kDamp * incoming_total;
+  //       // error += fabs(scores[u] - old_score);
+  //     }
+  //     // printf(" %2d    %lf\n", iter, error);
+  //     // if (error < epsilon)
+  //     //   break;
+  //   }
+
+  // }
+
   for (int iter=0; iter < max_iters; iter++) {
     double error = 0;
     #pragma omp parallel for
@@ -64,7 +90,7 @@ void PrintTopScores(const Graph &g, const pvector<ScoreT> &scores) {
   for (NodeID n=0; n < g.num_nodes(); n++) {
     score_pairs[n] = make_pair(n, scores[n]);
   }
-  int k = 5;
+  int k = 10;
   vector<pair<ScoreT, NodeID>> top_k = TopK(score_pairs, k);
   k = min(k, static_cast<int>(top_k.size()));
   for (auto kvp : top_k)

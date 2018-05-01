@@ -111,7 +111,7 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
     PBFS(g, source, path_counts, succ, depth_index, queue);
     t.Stop();
     // PrintStep("b", t.Seconds());
-    pvector<ScoreT> deltas(g.num_nodes(), 0);
+    // pvector<ScoreT> deltas(g.num_nodes(), 0);
     // t.Start();
     // for (int d=depth_index.size()-2; d >= 0; d--) {
     //   #pragma omp parallel for schedule(dynamic, 64)

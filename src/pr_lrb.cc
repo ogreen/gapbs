@@ -6,6 +6,11 @@
 #include <vector>
 
 #include <omp.h>
+#include <pthread.h>
+
+#include <algorithm>
+#include <vector>
+
 
 
 #include "benchmark.h"
@@ -42,108 +47,225 @@ pvector<ScoreT> PageRankPull(const Graph &g, int max_iters,
   pvector<ScoreT> outgoing_contrib(g.num_nodes());
   pvector<NodeID> lrb_queue(g.num_nodes());
   pvector<NodeID> lrb_sizes(g.num_nodes());
-  pvector<ScoreT> incomingArr(g.num_nodes(), init_score);
+  pvector<NodeID> lrb_pos(g.num_nodes());
 
 
   int32_t lrb_bins_global[32];
   int32_t lrb_prefix_global[33];
-  int32_t currSize;
 
-  double errorTotal=0;
+  int32_t lrb_bins_local_array[256][32];
+  int32_t lrb_pos_local_array[256][32];
 
-  #pragma omp parallel
-  {
-    int32_t lrb_bins_local[32];
-    int32_t lrb_pos_local[32];
+  // double errorTotal=0;
+  int32_t nthreads;
 
-    int32_t nthreads = omp_get_num_threads ();
-    int32_t thread_id = omp_get_thread_num ();
-
-
-    #pragma omp single
+	#pragma omp parallel
     {
-      for(int l=0; l<32; l++)
-        lrb_bins_global[l]=0;        
-    }
-    for(int l=0; l<32; l++)
-      lrb_bins_local[l]=0;        
+  		nthreads = omp_get_num_threads();
+  		#pragma omp barrier
+	}
 
-    #pragma omp for
-    for (NodeID u = 0; u < g.num_nodes(); u++) {
-        lrb_sizes[u] = 32 - __builtin_clz((uint32_t)g.out_degree(u));
-        lrb_bins_local[lrb_sizes[u]]++;
-    }
 
+	#pragma omp parallel for
+	for (int thread_id=0; thread_id < nthreads; thread_id++){
+	    int32_t* lrb_bins_local = lrb_bins_local_array[thread_id];
+	    // int32_t* lrb_pos_local  = lrb_pos_local_array[thread_id];
+
+		if (thread_id==0){
+			for(int l=0; l<32; l++)
+				lrb_bins_global[l]=0;
+		// threads=nthreads;
+		}
+	    for(int l=0; l<32; l++)
+	      lrb_bins_local[l]=0;        
+
+		NodeID start = (g.num_nodes() / nthreads) * thread_id;
+		NodeID end   = (g.num_nodes() / nthreads) * (thread_id + 1);
+		if (thread_id == 0)  start = 0;
+		if (thread_id == nthreads - 1) end = g.num_nodes();
+
+	    for (NodeID u=start; u < end; u++){
+	        lrb_sizes[u] = 32 - __builtin_clz((uint32_t)g.in_degree(u));
+	        lrb_bins_local[lrb_sizes[u]]++;
+	    }
+
+	    for(int l=0; l<32; l++){
+	      __sync_fetch_and_add(lrb_bins_global+l, lrb_bins_local[l]);
+	    }
+	}  
+
+    int32_t lrb_prefix_temp[33];
+    lrb_prefix_temp[32]=0;
+    for(int l=31; l>=0; l--){
+    	lrb_prefix_temp[l]=lrb_prefix_temp[l+1]+lrb_bins_global[l];
+    }
     for(int l=0; l<32; l++){
-      __sync_fetch_and_add(lrb_bins_global+l, lrb_bins_local[l]);
-    }
+      	lrb_prefix_global[l]=lrb_prefix_temp[l+1];
+    }    
 
-    #pragma omp barrier
+	#pragma omp parallel for
+	for (int thread_id=0; thread_id < nthreads; thread_id++){
+	    int32_t* lrb_bins_local = lrb_bins_local_array[thread_id];
+	    int32_t* lrb_pos_local  = lrb_pos_local_array[thread_id];
 
-    #pragma omp single
-    {
-      int32_t lrb_prefix_temp[33];
-      lrb_prefix_temp[32]=0;
+	    for(int l=0; l<32; l++){
+	     	lrb_pos_local[l] = __sync_fetch_and_add(lrb_prefix_global+l, lrb_bins_local[l]);
+	    }
 
-      for(int l=31; l>=0; l--){
-        lrb_prefix_temp[l]=lrb_prefix_temp[l+1]+lrb_bins_global[l];
-      }
-      for(int l=0; l<32; l++){
-        lrb_prefix_global[l]=lrb_prefix_temp[l+1];
-      }
-    }
+		NodeID start = (g.num_nodes() / nthreads) * thread_id;
+		NodeID end   = (g.num_nodes() / nthreads) * (thread_id + 1);
+		if (thread_id == 0)  start = 0;
+		if (thread_id == nthreads - 1) end = g.num_nodes();
 
-    #pragma omp barrier
+	    for (NodeID u=start; u < end; u++){
+	        lrb_queue[lrb_pos_local[lrb_sizes[u]]]=u;
+	        lrb_pos_local[lrb_sizes[u]]++;
+	    }
 
-    for(int l=0; l<32; l++){
-      lrb_pos_local[l] = __sync_fetch_and_add(lrb_prefix_global+l, lrb_bins_local[l]);
-    }
-
-    #pragma omp for
-    for (NodeID u = 0; u < g.num_nodes(); u++) {
-        lrb_queue[lrb_pos_local[lrb_sizes[u]]]=u;
-        lrb_pos_local[lrb_sizes[u]]++;
-    }
-
-    #pragma omp barrier
+	    int baa = (g.num_nodes() / nthreads) * thread_id;
+	    int ele = g.num_nodes() / nthreads;
+	    for (NodeID u=0; u < ele; u++){
+	    	int newpos=u*nthreads+thread_id;
+	    	if(newpos<g.num_nodes())
+		    	lrb_pos[u+baa]=newpos;
+	    }
   }
 
-    for (int iter=0; iter < max_iters; iter++) {
-      double error = 0;
-      #pragma omp parallel for
-      for (NodeID n=0; n < g.num_nodes(); n++)
-        outgoing_contrib[n] = scores[n] / g.out_degree(n);
-      
-      #pragma omp parallel for schedule(dynamic,64)
-      for (NodeID pos = 0; pos < g.num_nodes(); pos++) {
-      	// if(omp_get_thread_num ()==0 && pos <100)
-      	// 	printf("%d, ", pos);
-        NodeID u = lrb_queue[pos];    
-        incomingArr[u]=0;
-        // ScoreT incoming_total = 0;
-        for (NodeID v : g.in_neigh(u))
-          incomingArr[u] += outgoing_contrib[v];
-          // incoming_total += outgoing_contrib[v];
-  		}
-
-      #pragma omp parallel for
-      for (NodeID u=0; u < g.num_nodes(); u++){
-        ScoreT old_score = scores[u];
-        scores[u] = base_score + kDamp * incomingArr[u];
-        // scores[u] = base_score + kDamp * incoming_total;
-        // error += fabs(scores[u] - old_score);
-      }
-      // #pragma omp barrier    
 
 
-      // printf(" %2d    %lf\n", iter, errorTotal);
-      // if (errorTotal < epsilon)
-      //   break;
-      // if(thread_id==0)
-      //   errorTotal=0;
+	for (int iter=0; iter < max_iters; iter++) {
+		double error = 0;
+		#pragma omp parallel for
+		for (NodeID n=0; n < g.num_nodes(); n++)
+		  outgoing_contrib[n] = scores[n] / g.out_degree(n);
+		  #pragma omp parallel for
+		  for (NodeID n=0; n < g.num_nodes(); n++){
+ 		  	NodeID pos = lrb_pos[n];
+		    NodeID u = lrb_queue[pos]; 
+		    ScoreT incoming_total = 0;
 
-    }
-  // }
+			for (int d=0; d< g.in_degree(u); d++){
+				NodeID v = g.in_index_[u][d];
+		     	incoming_total += outgoing_contrib[v];
+			}
+		    // for (NodeID v : g.in_neigh(u))
+		    //   incoming_total += outgoing_contrib[v];
+
+
+		// ScoreT old_score = scores[u];
+		    scores[u] = base_score + kDamp * incoming_total;
+		    // scores[n] = base_score + kDamp * incoming_total;
+		  }
+	}
+
+
+ //  int32_t lrb_bins_global[32];
+ //  int32_t lrb_prefix_global[33];
+ //  int32_t currSize;
+
+ //  double errorTotal=0;
+ //  int32_t threads;
+ //  #pragma omp parallel
+ //  {
+ //    int32_t lrb_bins_local[32];
+ //    int32_t lrb_pos_local[32];
+
+ //    omp_set_num_threads (36);
+ //    #pragma omp barrier
+
+
+ //    int32_t nthreads = omp_get_num_threads ();
+ //    int32_t thread_id = omp_get_thread_num ();
+
+	// NodeID start = (g.num_nodes() / nthreads) * thread_id;
+	// NodeID end   = (g.num_nodes() / nthreads) * (thread_id + 1);
+	// if (thread_id == 0)  start = 0;
+	// if (thread_id == nthreads - 1) end = g.num_nodes();
+
+ //    #pragma omp single
+ //    {
+ //      for(int l=0; l<32; l++)
+ //        lrb_bins_global[l]=0;        
+	// 	threads=nthreads;
+ //    }
+ //    for(int l=0; l<32; l++)
+ //      lrb_bins_local[l]=0;        
+
+ //    // #pragma omp for
+ //    // for (NodeID u = 0; u < g.num_nodes(); u++) {
+ //    for (NodeID u=start; u < end; u++){
+ //        lrb_sizes[u] = 32 - __builtin_clz((uint32_t)g.out_degree(u));
+ //        lrb_bins_local[lrb_sizes[u]]++;
+ //    }
+
+ //    for(int l=0; l<32; l++){
+ //      __sync_fetch_and_add(lrb_bins_global+l, lrb_bins_local[l]);
+ //    }
+
+ //    #pragma omp barrier
+
+ //    #pragma omp single
+ //    {
+ //      int32_t lrb_prefix_temp[33];
+ //      lrb_prefix_temp[32]=0;
+
+ //      for(int l=31; l>=0; l--){
+ //        lrb_prefix_temp[l]=lrb_prefix_temp[l+1]+lrb_bins_global[l];
+ //      }
+ //      for(int l=0; l<32; l++){
+ //        lrb_prefix_global[l]=lrb_prefix_temp[l+1];
+ //      }
+ //    }
+
+ //    #pragma omp barrier
+
+ //    for(int l=0; l<32; l++){
+ //      lrb_pos_local[l] = __sync_fetch_and_add(lrb_prefix_global+l, lrb_bins_local[l]);
+ //    }
+
+ //    // #pragma omp for
+ //    // for (NodeID u = 0; u < g.num_nodes(); u++) {
+ //    for (NodeID u=start; u < end; u++){
+ //        lrb_queue[lrb_pos_local[lrb_sizes[u]]]=u;
+ //        lrb_pos_local[lrb_sizes[u]]++;
+ //    }
+
+ //    int baa = (g.num_nodes() / nthreads) * thread_id;
+ //    int ele = g.num_nodes() / nthreads;
+ //    for (NodeID u=0; u < ele; u++){
+ //    	int newpos=u*nthreads+thread_id;
+ //    	if(newpos<g.num_nodes())
+	//     	lrb_pos[u+baa]=newpos;
+ //    }
+ //  }
+
+ //  // for (int i=0; i<40; i++)
+ //  // 	printf("%d, ", lrb_pos[i]);
+
+
+   
+
+ //    for (int iter=0; iter < max_iters; iter++) {
+ 
+ //      #pragma omp parallel
+ //      for (NodeID n=0; n < g.num_nodes(); n++)
+ //        outgoing_contrib[n] = scores[n] / g.out_degree(n);
+
+ //      #pragma omp parallel
+ //      for (NodeID n=0; n < g.num_nodes(); n++){
+ // 	    // NodeID pos=n/omp_get_num_threads;
+ // 	    // NodeID pos=(n*threads)/g.num_nodes();
+ //      	NodeID pos = lrb_pos[n];
+ //        NodeID u = lrb_queue[pos]; 
+ //        ScoreT incoming_total = 0;
+ //        for (NodeID v : g.in_neigh(u))
+ //          incoming_total += outgoing_contrib[v];
+ //  		ScoreT old_score = scores[u];
+ //        scores[u] = base_score + kDamp * incoming_total;
+ //      }
+
+ //    }
+
 
   return scores;
 }
@@ -154,7 +276,7 @@ void PrintTopScores(const Graph &g, const pvector<ScoreT> &scores) {
   for (NodeID n=0; n < g.num_nodes(); n++) {
     score_pairs[n] = make_pair(n, scores[n]);
   }
-  int k = 5;
+  int k = 10;
   vector<pair<ScoreT, NodeID>> top_k = TopK(score_pairs, k);
   k = min(k, static_cast<int>(top_k.size()));
   for (auto kvp : top_k)

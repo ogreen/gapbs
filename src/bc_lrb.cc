@@ -49,114 +49,141 @@ propagation phase.
 using namespace std;
 typedef float ScoreT;
 
-void PBFS(const Graph &g, NodeID source, pvector<NodeID> &path_counts,
-    Bitmap &succ, vector<SlidingQueue<NodeID>::iterator> &depth_index,
-    SlidingQueue<NodeID> &queue,pvector<NodeID> &lrb_queue,pvector<NodeID> &lrb_sizes) {
-  pvector<NodeID> depths(g.num_nodes(), -1);
-  depths[source] = 0;
-  path_counts[source] = 1;
-  queue.push_back(source);
-  depth_index.push_back(queue.begin());
-  queue.slide_window();
 
-  int32_t lrb_bins_global[32];
-  int32_t lrb_prefix_global[33];
-  int32_t currSize;
+  void PBFS(const Graph &g, NodeID source, pvector<NodeID> &path_counts,
+      Bitmap &succ, vector<SlidingQueue<NodeID>::iterator> &depth_index,
+      SlidingQueue<NodeID> &queue,pvector<NodeID> &lrb_queue,pvector<NodeID> &lrb_sizes) {
+    pvector<NodeID> depths(g.num_nodes(), -1);
+    depths[source] = 0;
+    path_counts[source] = 1;
+    queue.push_back(source);
+    depth_index.push_back(queue.begin());
+    queue.slide_window();
 
-  const NodeID* g_out_start = g.out_neigh(0).begin();
-  #pragma omp parallel
-  {
-    NodeID depth = 0;
-    QueueBuffer<NodeID> lqueue(queue);
-    int32_t lrb_bins_local[32];
-    int32_t lrb_pos_local[32];
-
-    int32_t nthreads = omp_get_num_threads ();
-    int32_t thread_id = omp_get_thread_num ();
+  	int32_t lrb_bins_global[32];
+  	int32_t lrb_prefix_global[33];
+  	int32_t lrb_bins_local_array[256][32];
+  	int32_t lrb_pos_local_array[256][32];
+  	int32_t currSize;
+  	QueueBuffer<NodeID>* bufferArray[256];
 
 
-    while (!queue.empty()) {
-      #pragma omp single
+  	const NodeID* g_out_start = g.out_neigh(0).begin();
+  	NodeID depth = 0;
+  	
+  	int32_t nthreads;
+
+  	  #pragma omp parallel
       {
-        depth_index.push_back(queue.begin());
-        for(int l=0; l<32; l++)
-          lrb_bins_global[l]=0;        
-      }
-      depth++;
+    		nthreads = omp_get_num_threads();
+    		
+        int32_t thread_id = omp_get_thread_num ();
+        bufferArray[thread_id] = new QueueBuffer<NodeID>(queue);
 
-      for(int l=0; l<32; l++)
-        lrb_bins_local[l]=0;        
+        #pragma omp barrier
 
-      #pragma omp for
-      for (auto q_iter = queue.begin(); q_iter < queue.end(); q_iter++) {
-          NodeID u = *q_iter;
-          lrb_bins_local[lrb_sizes[u]]++;
-      }
+  	  }
 
-      for(int l=0; l<32; l++){
-        __sync_fetch_and_add(lrb_bins_global+l, lrb_bins_local[l]);
-      }
+      while (!queue.empty()) {
+          depth_index.push_back(queue.begin());
+          depth++;
 
-      #pragma omp barrier
+          for(int l=0; l<32; l++)
+          	lrb_bins_global[l]=0;        
 
-      #pragma omp single
-      {
-        int32_t lrb_prefix_temp[33];
-        lrb_prefix_temp[32]=0;
+      		#pragma omp parallel for
+      		for (int thread_id=0; thread_id < nthreads; thread_id++){
+      		    int32_t* lrb_bins_local = lrb_bins_local_array[thread_id];
+      	    	for(int l=0; l<32; l++)
+      	        	lrb_bins_local[l]=0;
 
-        for(int l=31; l>=0; l--){
-          lrb_prefix_temp[l]=lrb_prefix_temp[l+1]+lrb_bins_global[l];
-        }
-        for(int l=0; l<32; l++){
-          lrb_prefix_global[l]=lrb_prefix_temp[l+1];
-        }
+     	        int32_t frontierSize = queue.end() - queue.begin();
+     	        auto start = queue.begin()+(frontierSize / nthreads) * thread_id;
+        			auto end   = queue.begin()+(frontierSize / nthreads) * (thread_id + 1);
+        			if (thread_id == 0)            start = queue.begin();
+        			if (thread_id == nthreads - 1) end = queue.end();
 
-        currSize=lrb_prefix_temp[0];
-      }
+      		    for (auto q_iter=start; q_iter < end; q_iter++){
+      		        NodeID u = *q_iter;
+      		        lrb_bins_local[lrb_sizes[u]]++;
+      		    }
+        			for(int l=0; l<32; l++){
+        				__sync_fetch_and_add(lrb_bins_global+l, lrb_bins_local[l]);
+        			}
+      	   }
 
-      #pragma omp barrier
+          int32_t lrb_prefix_temp[33];
+          lrb_prefix_temp[32]=0;
 
-      for(int l=0; l<32; l++){
-        lrb_pos_local[l] = __sync_fetch_and_add(lrb_prefix_global+l, lrb_bins_local[l]);
-      }
-
-      #pragma omp for 
-      for (auto q_iter = queue.begin(); q_iter < queue.end(); q_iter++) {
-          NodeID u = *q_iter;
-          // int32_t size =32 - __builtin_clz((uint32_t)g.out_degree(u)); 
-          // lrb_queue[lrb_pos_local[size]]=u;
-          // int32_t size =32 - __builtin_clz((uint32_t)g.out_degree(u)); 
-          lrb_queue[lrb_pos_local[lrb_sizes[u]]]=u;
-          lrb_pos_local[lrb_sizes[u]]++;
-      }
-
-      #pragma omp barrier
-
-      // for (int32_t pos = thread_id; pos < currSize; pos+=nthreads) {
-      #pragma omp for schedule(static, 2)
-      for (int32_t pos = 0; pos < currSize; pos+=1) {
-
-
-          NodeID u = lrb_queue[pos];
-          for (NodeID &v : g.out_neigh(u)) {
-            if ((depths[v] == -1) &&
-                (compare_and_swap(depths[v], static_cast<NodeID>(-1), depth))) {
-              lqueue.push_back(v);
-            }
-            if (depths[v] == depth) {
-              succ.set_bit_atomic(&v - g_out_start);
-              fetch_and_add(path_counts[v], path_counts[u]);
-            }
+          for(int l=31; l>=0; l--){
+            lrb_prefix_temp[l]=lrb_prefix_temp[l+1]+lrb_bins_global[l];
           }
-      }
-      lqueue.flush();
+
+          for(int l=0; l<32; l++){
+            lrb_prefix_global[l]=lrb_prefix_temp[l+1];
+          }
+          currSize=lrb_prefix_temp[0];
+
+      		#pragma omp parallel for
+      		for (int thread_id=0; thread_id < nthreads; thread_id++){
+      		    int32_t* lrb_bins_local = lrb_bins_local_array[thread_id];
+      		    int32_t* lrb_pos_local  = lrb_pos_local_array[thread_id];
+
+      			  for(int l=0; l<32; l++){
+              		lrb_pos_local[l] = __sync_fetch_and_add(lrb_prefix_global+l, lrb_bins_local[l]);
+            	}
+
+      	      int32_t frontierSize = queue.end() - queue.begin();
+      	      auto start = queue.begin()+(frontierSize / nthreads) * thread_id;
+      			  auto end   = queue.begin()+(frontierSize / nthreads) * (thread_id + 1);
+      			  if (thread_id == 0)  start = queue.begin();
+      			  if (thread_id == nthreads - 1) end = queue.end();
+
+      		    for (auto q_iter=start; q_iter < end; q_iter++){
+      		        NodeID u = *q_iter;
+      		        lrb_queue[lrb_pos_local[lrb_sizes[u]]]=u;
+      		        lrb_pos_local[lrb_sizes[u]]++;
+      		    }
+      		}
+
+      		#pragma omp parallel for
+      		for (int thread_id=0; thread_id < nthreads; thread_id++){
+      		   	// QueueBuffer<NodeID> lqueue(queue);
+              QueueBuffer<NodeID>* lqueue = bufferArray[thread_id];
+
+      		    for (int32_t pos = thread_id; pos < currSize; pos+=nthreads) {
+
+      	        	NodeID u = lrb_queue[pos];
+      	            for (NodeID &v : g.out_neigh(u)) {
+      		            if ((depths[v] == -1) &&
+      		                (compare_and_swap(depths[v], static_cast<NodeID>(-1), depth))) {
+                          // lqueue.push_back(v);
+                          lqueue->push_back(v);
+
+      		            }
+      		            if (depths[v] == depth) {
+      		            	succ.set_bit_atomic(&v - g_out_start);
+      		            	fetch_and_add(path_counts[v], path_counts[u]);
+      		            }
+      		        }
+      		    }	
+              // lqueue.flush();
+              lqueue->flush();
+      	  }
+        queue.slide_window();
+  	}
+   	depth_index.push_back(queue.begin());
+
+    #pragma omp parallel
+    {      
+      int32_t thread_id = omp_get_thread_num ();
+      delete bufferArray[thread_id];
       #pragma omp barrier
-      #pragma omp single
-      queue.slide_window();
+
     }
-  }
-  depth_index.push_back(queue.begin());
+
 }
+
 
 
 pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
@@ -173,7 +200,6 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
       int32_t size  = 32 - __builtin_clz((uint32_t)g.out_degree(u)); 
       lrb_sizes[u] = size;
   }
-
 
 
   Bitmap succ(g.num_edges_directed());
@@ -193,7 +219,7 @@ pvector<ScoreT> Brandes(const Graph &g, SourcePicker<Graph> &sp,
     PBFS(g, source, path_counts, succ, depth_index, queue,lrb_queue,lrb_sizes);
     t.Stop();
     // PrintStep("b", t.Seconds());
-    pvector<ScoreT> deltas(g.num_nodes(), 0);
+    // pvector<ScoreT> deltas(g.num_nodes(), 0);
     // t.Start();
  
     // for (int d=depth_index.size()-2; d >= 0; d--) {

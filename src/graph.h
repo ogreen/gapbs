@@ -94,7 +94,7 @@ class CSRGraph {
    public:
     Neighborhood(NodeID_ n, DestID_** g_index) : n_(n), g_index_(g_index) {}
     typedef DestID_* iterator;
-    iterator begin() { return g_index_[n_]; }
+    iterator begin() { return g_index_[n_];}
     iterator end()   { return g_index_[n_+1]; }
   };
 
@@ -104,7 +104,7 @@ class CSRGraph {
     if (out_neighbors_ != nullptr)
       delete[] out_neighbors_;
     if (directed_) {
-      if (in_index_ != nullptr)
+        if (in_index_ != nullptr)
         delete[] in_index_;
       if (in_neighbors_ != nullptr)
         delete[] in_neighbors_;
@@ -244,7 +244,8 @@ class CSRGraph {
     return Range<NodeID_>(num_nodes());
   }
 
- private:
+public: 
+ // private:
   bool directed_;
   int64_t num_nodes_;
   int64_t num_edges_;
