@@ -107,7 +107,7 @@ void BenchmarkKernel(const CLApp &cli, const GraphT_ &g,
     trial_timer.Start();
     auto result = kernel(g);
     trial_timer.Stop();
-    PrintTime("Trial Time", trial_timer.Seconds());
+    // PrintTime("Trial Time", trial_timer.Seconds());
     total_seconds += trial_timer.Seconds();
     if (cli.do_analysis() && (iter == (cli.num_trials()-1)))
       stats(g, result);

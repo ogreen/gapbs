@@ -11,6 +11,8 @@
 #include <algorithm>
 #include <vector>
 
+#include <immintrin.h>
+
 
 
 #include "benchmark.h"
@@ -43,11 +45,17 @@ pvector<ScoreT> PageRankPull(const Graph &g, int max_iters,
                              double epsilon = 0) {
   const ScoreT init_score = 1.0f / g.num_nodes();
   const ScoreT base_score = (1.0f - kDamp) / g.num_nodes();
-  pvector<ScoreT> scores(g.num_nodes(), init_score);
-  pvector<ScoreT> outgoing_contrib(g.num_nodes());
-  pvector<NodeID> lrb_queue(g.num_nodes());
+  pvector<ScoreT> scoresVec(g.num_nodes(), init_score);
+  // pvector<NodeID> lrb_queue(g.num_nodes());
+  NodeID* lrb_queue = new NodeID[g.num_nodes()];
+  ScoreT* scores = new ScoreT[g.num_nodes()];
+  ScoreT* outgoing_contrib = new ScoreT[g.num_nodes()];
+
   pvector<NodeID> lrb_sizes(g.num_nodes());
   pvector<NodeID> lrb_pos(g.num_nodes());
+
+  pvector<SGOffset> offSetVector = g.VertexOffsets(true);
+  NodeID* offSet = new NodeID[g.num_nodes()+1];
 
 
   int32_t lrb_bins_global[32];
@@ -64,6 +72,15 @@ pvector<ScoreT> PageRankPull(const Graph &g, int max_iters,
   		nthreads = omp_get_num_threads();
   		#pragma omp barrier
 	}
+
+    #pragma omp parallel for
+    for (int n=0; n < g.num_nodes(); n++)
+      scores[n] = init_score;
+
+
+    #pragma omp parallel for
+    for (int n=0; n < g.num_nodes()+1; n++)
+      offSet[n] = offSetVector[n]; 
 
 
 	#pragma omp parallel for
@@ -122,152 +139,110 @@ pvector<ScoreT> PageRankPull(const Graph &g, int max_iters,
 	        lrb_pos_local[lrb_sizes[u]]++;
 	    }
 
-	    int baa = (g.num_nodes() / nthreads) * thread_id;
-	    int ele = g.num_nodes() / nthreads;
-	    for (NodeID u=0; u < ele; u++){
-	    	int newpos=u*nthreads+thread_id;
-	    	if(newpos<g.num_nodes())
-		    	lrb_pos[u+baa]=newpos;
-	    }
-  }
+	    // int baa = (g.num_nodes() / nthreads) * thread_id;
+	    // int ele = g.num_nodes() / nthreads;
+	    // for (NodeID u=0; u < ele; u++){
+	    // 	int newpos=u*nthreads+thread_id;
+	    // 	if(newpos<g.num_nodes())
+		   //  	lrb_pos[u+baa]=newpos;
+	    // }
+    }
 
-
-
+	static const __m512i mizero32 = _mm512_set_epi32(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0);
+	static const  __m512i mione32 = _mm512_set_epi32(1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1); 
+	static const  __m512 mfzero32 = _mm512_set_ps(0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0); 
 	for (int iter=0; iter < max_iters; iter++) {
-		double error = 0;
+		int step = nthreads*16;
+
 		#pragma omp parallel for
 		for (NodeID n=0; n < g.num_nodes(); n++)
 		  outgoing_contrib[n] = scores[n] / g.out_degree(n);
-		  #pragma omp parallel for
-		  for (NodeID n=0; n < g.num_nodes(); n++){
- 		  	NodeID pos = lrb_pos[n];
-		    NodeID u = lrb_queue[pos]; 
-		    ScoreT incoming_total = 0;
 
-			for (int d=0; d< g.in_degree(u); d++){
-				NodeID v = g.in_index_[u][d];
-		     	incoming_total += outgoing_contrib[v];
-			}
-		    // for (NodeID v : g.in_neigh(u))
-		    //   incoming_total += outgoing_contrib[v];
+		#pragma omp parallel for
+  		for (int thread_id=0; thread_id < nthreads; thread_id++){
 
 
-		// ScoreT old_score = scores[u];
-		    scores[u] = base_score + kDamp * incoming_total;
-		    // scores[n] = base_score + kDamp * incoming_total;
+			__m512 baseVec = _mm512_set_ps(base_score,base_score,base_score,base_score,base_score,base_score,base_score,base_score,
+										   base_score,base_score,base_score,base_score,base_score,base_score,base_score,base_score);
+
+			__m512 kDampVec = _mm512_set_ps(kDamp,kDamp,kDamp,kDamp,kDamp,kDamp,kDamp,kDamp,
+											kDamp,kDamp,kDamp,kDamp,kDamp,kDamp,kDamp,kDamp);
+  		    for (int32_t pos = thread_id*16; pos < g.num_nodes(); pos+=step) {
+
+			    if((pos+16)>=g.num_nodes()){
+			    	for(int32_t pos2=pos; pos2<g.num_nodes(); pos2++){
+					    NodeID u = lrb_queue[pos2]; 
+
+					    ScoreT incoming_total = 0;
+						for (int d=0; d< g.in_degree(u); d++){
+							NodeID v = g.in_index_[u][d];
+					     	incoming_total += outgoing_contrib[v];
+						}
+					    scores[u] = base_score + kDamp * incoming_total;
+			    	}
+			    	break;
+			    }
+
+				int32_t exceededAStop,maskA;
+
+			    __m512i uVec 		   		= _mm512_load_epi32(lrb_queue+pos);
+				__m512i uVecP1         		= _mm512_add_epi32(uVec,mione32);		    
+				__m512 incoming_totalVec	= mfzero32;
+
+			    __m512i indexA       = _mm512_i32gather_epi32(uVec, offSet, 4);
+			    __m512i indexAStop	= _mm512_i32gather_epi32(uVecP1, offSet, 4);
+			 	exceededAStop 		= _mm512_cmpgt_epi32_mask(indexAStop, indexA);
+
+	    		// for(int32_t p=0;p<16; p++){
+	    		// 	uint32_t *val1 = (uint32_t*) &indexAStop;
+	    		// 	uint32_t *val2 = (uint32_t*) &indexA;
+	    		// 	if((val1[p]-val2[p])<0)
+		    	// 		printf("OUCH");
+	    		// }
+	    		// for(int32_t p=pos;p<(pos+16); p++){
+	    		// 	if((offSet[lrb_queue[p]+1]-offSet[lrb_queue[p]])<0)
+	    		// 		printf("%d,",lrb_queue[p]);
+		    	// 	// printf("(%d, %d) ",offSet[lrb_queue[p]+1]-offSet[lrb_queue[p]],g.in_degree(lrb_queue[p]));
+	    		// }
+	    		// printf("\n");
+
+				__m512i miAelems;__m512  mContri;
+			    while (exceededAStop != 0) {
+			        miAelems			= _mm512_mask_i32gather_epi32(miAelems, exceededAStop,indexA,(const int32_t *)g.in_neighbors_, 4);
+			     	mContri  			= _mm512_mask_i32gather_ps(mContri, exceededAStop ,miAelems, outgoing_contrib,4);
+
+			     	incoming_totalVec 	= _mm512_mask_add_ps(incoming_totalVec,exceededAStop,incoming_totalVec, mContri);
+
+			     	indexA    			= _mm512_mask_add_epi32(indexA, exceededAStop, indexA,mione32);
+			        exceededAStop 		= _mm512_cmpgt_epi32_mask(indexAStop, indexA);
+			 //        // break;
+			    
+			    }
+
+				incoming_totalVec = _mm512_fmadd_ps(kDampVec,incoming_totalVec,baseVec);
+				// scores[u] = base_score + kDamp * incoming_total;
+
+			    _mm512_i32scatter_ps(scores,uVec,incoming_totalVec,4);
+
 		  }
+		}
 	}
 
+	// printf("EXITED\n"); fflush(stdout);
 
- //  int32_t lrb_bins_global[32];
- //  int32_t lrb_prefix_global[33];
- //  int32_t currSize;
-
- //  double errorTotal=0;
- //  int32_t threads;
- //  #pragma omp parallel
- //  {
- //    int32_t lrb_bins_local[32];
- //    int32_t lrb_pos_local[32];
-
- //    omp_set_num_threads (36);
- //    #pragma omp barrier
+    #pragma omp parallel for
+    for (int n=0; n < g.num_nodes(); n++)
+      scoresVec[n] = scores[n];
 
 
- //    int32_t nthreads = omp_get_num_threads ();
- //    int32_t thread_id = omp_get_thread_num ();
+	delete[] lrb_queue;
+	delete[] scores;
+	delete[] outgoing_contrib;
+	delete[] offSet;
 
-	// NodeID start = (g.num_nodes() / nthreads) * thread_id;
-	// NodeID end   = (g.num_nodes() / nthreads) * (thread_id + 1);
-	// if (thread_id == 0)  start = 0;
-	// if (thread_id == nthreads - 1) end = g.num_nodes();
-
- //    #pragma omp single
- //    {
- //      for(int l=0; l<32; l++)
- //        lrb_bins_global[l]=0;        
-	// 	threads=nthreads;
- //    }
- //    for(int l=0; l<32; l++)
- //      lrb_bins_local[l]=0;        
-
- //    // #pragma omp for
- //    // for (NodeID u = 0; u < g.num_nodes(); u++) {
- //    for (NodeID u=start; u < end; u++){
- //        lrb_sizes[u] = 32 - __builtin_clz((uint32_t)g.out_degree(u));
- //        lrb_bins_local[lrb_sizes[u]]++;
- //    }
-
- //    for(int l=0; l<32; l++){
- //      __sync_fetch_and_add(lrb_bins_global+l, lrb_bins_local[l]);
- //    }
-
- //    #pragma omp barrier
-
- //    #pragma omp single
- //    {
- //      int32_t lrb_prefix_temp[33];
- //      lrb_prefix_temp[32]=0;
-
- //      for(int l=31; l>=0; l--){
- //        lrb_prefix_temp[l]=lrb_prefix_temp[l+1]+lrb_bins_global[l];
- //      }
- //      for(int l=0; l<32; l++){
- //        lrb_prefix_global[l]=lrb_prefix_temp[l+1];
- //      }
- //    }
-
- //    #pragma omp barrier
-
- //    for(int l=0; l<32; l++){
- //      lrb_pos_local[l] = __sync_fetch_and_add(lrb_prefix_global+l, lrb_bins_local[l]);
- //    }
-
- //    // #pragma omp for
- //    // for (NodeID u = 0; u < g.num_nodes(); u++) {
- //    for (NodeID u=start; u < end; u++){
- //        lrb_queue[lrb_pos_local[lrb_sizes[u]]]=u;
- //        lrb_pos_local[lrb_sizes[u]]++;
- //    }
-
- //    int baa = (g.num_nodes() / nthreads) * thread_id;
- //    int ele = g.num_nodes() / nthreads;
- //    for (NodeID u=0; u < ele; u++){
- //    	int newpos=u*nthreads+thread_id;
- //    	if(newpos<g.num_nodes())
-	//     	lrb_pos[u+baa]=newpos;
- //    }
- //  }
-
- //  // for (int i=0; i<40; i++)
- //  // 	printf("%d, ", lrb_pos[i]);
-
-
-   
-
- //    for (int iter=0; iter < max_iters; iter++) {
  
- //      #pragma omp parallel
- //      for (NodeID n=0; n < g.num_nodes(); n++)
- //        outgoing_contrib[n] = scores[n] / g.out_degree(n);
 
- //      #pragma omp parallel
- //      for (NodeID n=0; n < g.num_nodes(); n++){
- // 	    // NodeID pos=n/omp_get_num_threads;
- // 	    // NodeID pos=(n*threads)/g.num_nodes();
- //      	NodeID pos = lrb_pos[n];
- //        NodeID u = lrb_queue[pos]; 
- //        ScoreT incoming_total = 0;
- //        for (NodeID v : g.in_neigh(u))
- //          incoming_total += outgoing_contrib[v];
- //  		ScoreT old_score = scores[u];
- //        scores[u] = base_score + kDamp * incoming_total;
- //      }
-
- //    }
-
-
-  return scores;
+  return scoresVec;
 }
 
 

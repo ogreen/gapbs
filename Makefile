@@ -1,10 +1,12 @@
 # See LICENSE.txt for license details.
 
-CXX_FLAGS += -g -std=c++11 -O3 -Wall -march=native 
+# CXX_FLAGS += -g -std=c++11 -O3 -Wall -march=native -mavx512f
+CXX_FLAGS += -g -std=c++11 -O3 -Wall -march=native -axMIC-AVX512
+
 PAR_FLAG = -fopenmp
 
 ifneq (,$(findstring icpc,$(CXX)))
-	PAR_FLAG = -openmp
+	PAR_FLAG = -qopenmp
 endif
 
 ifneq (,$(findstring sunCC,$(CXX)))
