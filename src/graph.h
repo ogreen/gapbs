@@ -94,17 +94,17 @@ class CSRGraph {
    public:
     Neighborhood(NodeID_ n, DestID_** g_index) : n_(n), g_index_(g_index) {}
     typedef DestID_* iterator;
-    iterator begin() { return g_index_[n_];}
+    iterator begin() { return g_index_[n_]; }
     iterator end()   { return g_index_[n_+1]; }
   };
 
   void ReleaseResources() {
     if (out_index_ != nullptr)
       delete[] out_index_;
-    if (out_neighbors_ != nullptr)
+     if (out_neighbors_ != nullptr)
       delete[] out_neighbors_;
     if (directed_) {
-        if (in_index_ != nullptr)
+      if (in_index_ != nullptr)
         delete[] in_index_;
       if (in_neighbors_ != nullptr)
         delete[] in_neighbors_;
@@ -232,11 +232,22 @@ class CSRGraph {
 
   pvector<SGOffset> VertexOffsets(bool in_graph = false) const {
     pvector<SGOffset> offsets(num_nodes_+1);
-    for (NodeID_ n=0; n < num_nodes_+1; n++)
-      if (in_graph)
+
+    if(in_graph){
+      #pragma omp parallel for
+      for (NodeID_ n=0; n < num_nodes_+1; n++)
         offsets[n] = in_index_[n] - in_index_[0];
-      else
+    }
+    else{
+      #pragma omp parallel for
+      for (NodeID_ n=0; n < num_nodes_+1; n++)
         offsets[n] = out_index_[n] - out_index_[0];
+    }
+    // for (NodeID_ n=0; n < num_nodes_+1; n++)
+    //   if (in_graph)
+    //     offsets[n] = in_index_[n] - in_index_[0];
+    //   else
+    //     offsets[n] = out_index_[n] - out_index_[0];
     return offsets;
   }
 
@@ -244,8 +255,8 @@ class CSRGraph {
     return Range<NodeID_>(num_nodes());
   }
 
-public: 
  // private:
+public:  
   bool directed_;
   int64_t num_nodes_;
   int64_t num_edges_;
