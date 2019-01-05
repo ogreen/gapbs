@@ -121,12 +121,12 @@ pvector<NodeID> InitParent(const Graph &g) {
 
 pvector<NodeID> DOBFS(const Graph &g, NodeID source, int alpha = 15,
                       int beta = 18) {
-  PrintStep("Source", static_cast<int64_t>(source));
+  //PrintStep("Source", static_cast<int64_t>(source));
   Timer t;
-  t.Start();
+  //t.Start();
   pvector<NodeID> parent = InitParent(g);
-  t.Stop();
-  PrintStep("i", t.Seconds());
+  //t.Stop();
+  //PrintStep("i", t.Seconds());
   parent[source] = source;
   SlidingQueue<NodeID> queue(g.num_nodes());
   queue.push_back(source);
@@ -141,28 +141,28 @@ pvector<NodeID> DOBFS(const Graph &g, NodeID source, int alpha = 15,
     if (scout_count > edges_to_check / alpha) {
       int64_t awake_count, old_awake_count;
       TIME_OP(t, QueueToBitmap(queue, front));
-      PrintStep("e", t.Seconds());
+    //  PrintStep("e", t.Seconds());
       awake_count = queue.size();
       queue.slide_window();
       do {
-        t.Start();
+        //t.Start();
         old_awake_count = awake_count;
         awake_count = BUStep(g, parent, front, curr);
         front.swap(curr);
-        t.Stop();
-        PrintStep("bu", t.Seconds(), awake_count);
+        //t.Stop();
+     //   PrintStep("bu", t.Seconds(), awake_count);
       } while ((awake_count >= old_awake_count) ||
                (awake_count > g.num_nodes() / beta));
       TIME_OP(t, BitmapToQueue(g, front, queue));
-      PrintStep("c", t.Seconds());
+      //PrintStep("c", t.Seconds());
       scout_count = 1;
     } else {
-      t.Start();
+      //t.Start();
       edges_to_check -= scout_count;
       scout_count = TDStep(g, parent, queue);
       queue.slide_window();
-      t.Stop();
-      PrintStep("td", t.Seconds(), queue.size());
+      //t.Stop();
+    //  PrintStep("td", t.Seconds(), queue.size());
     }
   }
   #pragma omp parallel for

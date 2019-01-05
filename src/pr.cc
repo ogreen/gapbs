@@ -11,6 +11,7 @@
 #include "graph.h"
 #include "pvector.h"
 
+#include <omp.h>
 
 /*
 GAP Benchmark Suite
@@ -99,12 +100,17 @@ int main(int argc, char* argv[]) {
     return -1;
   Builder b(cli);
   Graph g = b.MakeGraph();
-  auto PRBound = [&cli] (const Graph &g) {
-    return PageRankPull(g, cli.max_iters(), cli.tolerance());
-  };
+   auto PRBound = [&cli] (const Graph &g) {
+	  return PageRankPull(g, cli.max_iters(), cli.tolerance());
+	};
   auto VerifierBound = [&cli] (const Graph &g, const pvector<ScoreT> &scores) {
     return PRVerifier(g, scores, cli.tolerance());
   };
-  BenchmarkKernel(cli, g, PRBound, PrintTopScores, VerifierBound);
-  return 0;
+
+//   for(int t=1; t<=256; t*=2){
+//    omp_set_num_threads(t);
+ 
+	BenchmarkKernel(cli, g, PRBound, PrintTopScores, VerifierBound);
+//  }
+return 0;
 }

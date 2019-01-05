@@ -79,7 +79,7 @@ pvector<NodeID> ShiloachVishkin(const Graph &g) {
       }
     }
   }
-  cout << "Shiloach-Vishkin took " << num_iter << " iterations" << endl;
+  //cout << "Shiloach-Vishkin took " << num_iter << " iterations" << endl;
   return comp;
 }
 

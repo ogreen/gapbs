@@ -16,6 +16,7 @@
 #include "timer.h"
 #include "util.h"
 
+#include <omp.h>
 
 /*
 GAP Benchmark Suite
@@ -237,7 +238,11 @@ int main(int argc, char* argv[]) {
   auto VerifierBound = [&vsp, &cli] (const Graph &g,
                                      const pvector<ScoreT> &scores) {
     return BCVerifier(g, vsp, cli.num_iters(), scores);
-  };
-  BenchmarkKernel(cli, g, BCBound, PrintTopScores, VerifierBound);
+  };    
+//  for(int t=1; t<=256; t*=2){
+//    omp_set_num_threads(t);
+ 
+	BenchmarkKernel(cli, g, BCBound, PrintTopScores, VerifierBound);
+//  }
   return 0;
 }

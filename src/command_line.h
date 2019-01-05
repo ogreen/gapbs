@@ -109,7 +109,7 @@ class CLBase {
 
 class CLApp : public CLBase {
   bool do_analysis_ = false;
-  int num_trials_ = 16;
+  int num_trials_ = 10;
   int64_t start_vertex_ = -1;
   bool do_verify_ = false;
 
